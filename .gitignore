@@ -1,0 +1,5 @@
+*.uf2
+*.bin
+sealed-signature.json
+out.md
+__pycache__/
