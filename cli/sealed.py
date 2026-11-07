@@ -93,9 +93,16 @@ class Serial:
         """Read until the shell echoes a lone OK line, or we time out."""
         buf = b""
         deadline = time.time() + timeout
+        quiet_since = None
         while time.time() < deadline:
-            r, _, _ = select.select([self.fd], [], [], 0.25)
+            r, _, _ = select.select([self.fd], [], [], 0.1)
             if not r:
+                # The console's prompt string is not part of any stability
+                # contract, so we also accept "the line went quiet" as done.
+                if buf and quiet_since is None:
+                    quiet_since = time.time()
+                elif quiet_since and time.time() - quiet_since > 0.45:
+                    break
                 continue
             try:
                 chunk = os.read(self.fd, 4096)
@@ -103,10 +110,11 @@ class Serial:
                 break
             if not chunk:
                 continue
+            quiet_since = None
             buf += chunk
             text = buf.decode("utf-8", "replace")
             if any(m in text for m in PROMPT_MARKERS):
-                return text
+                break
         return buf.decode("utf-8", "replace")
 
     def command(self, line, timeout=12.0):
