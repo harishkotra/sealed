@@ -442,8 +442,6 @@ Open an issue before starting one of these so we do not collide.
 
 ## Credits
 
-Built by [Harish Kotra](https://harishkotra.me) for the Baochip / Dabao hackathon at Devcon 8, Mumbai.
-
 Standing on: [Xous](https://github.com/betrusted-io/xous-core) by Bunnie Huang and the Betrusted contributors, [RustCrypto](https://github.com/RustCrypto) for `p256` and `sha2`, and Baochip for shipping an open board with a keystore on it.
 
 Check out my other builds at [dailybuild.xyz](https://dailybuild.xyz).
