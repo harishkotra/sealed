@@ -96,14 +96,46 @@ What SEALED does *not* do, in the same font size as what it does:
   load-bearing; the BIO and the accelerators are not. The README says the same thing
   in its silicon table, because a table that claims everything is a table that says
   nothing.
-* **Developer mode is flipped.** Flashing a development image sets the chip's
-  permanent developer-mode flag. That is reported, not hidden: this is a hackathon
+* **Developer mode is flipped.** Flashing this development image moves boot1's
+  next-stage signing key from `2/2 (beta)` to `3/3 (dev)`, visible in `audit`. That is reported, not hidden: this is a hackathon
   board running hackathon software, and any attestation story built on it should say
   so out loud.
 
 The point of publishing the limitations is that a trust claim you cannot falsify is
 marketing. SEALED's claim is narrow and checkable: *the owner's seal is enforced
 against the owner's measurement, on hardware the owner can audit.*
+
+## What the hardware said
+
+The build proved the code compiled. The board decided whether the claim was true, and
+it found two things the compiler could not.
+
+The first was mine: `state[..8] == MAGIC_ENROLLED` compares an 8-byte slice against a
+32-byte array. Rust happily compiles that comparison and it is always false, so
+`status` kept reporting `unsealed` on a device that had enrolled correctly. The
+keystore was fine the whole time — `sealed probe` showed the slot holding
+`5345414c45443031` (`"SEALED01"`) and a `WRITE_RT=OK` / `READ_RT=a5a5…` roundtrip
+before I touched anything else. It is now a full-slot comparison.
+
+The second is a property of the console, not of SEALED: its serial line editor
+mangles repeated bytes in the echo, and once silently truncated a 66-character
+argument to 64. The device still parsed and answered correctly, but a demo that
+trusts the echo could publish a signature over a digest nobody asked for. So the CLI
+now re-derives the quote from the challenge it sent (`CHALLENGE_BOUND=PASS`) and
+verifies the signature against the digest it requested, which makes a mangled
+argument a hard failure instead of a silent wrong answer.
+
+Everything else held. On real silicon: `SHA256_KAT=PASS`, `ECDSA_ROUNDTRIP=PASS`,
+`ECDSA_BADMSG=PASS`, `TRNG=OK`, `MEASURE=3eecd519…dd8e` — the same digest the host
+computes from the ELF — `STATE=enrolled` survives a reboot *and* an `apps.uf2`
+replacement (`SIGNS=1` carried across the reflash), and a one-byte policy edit moves
+the measurement to `44c9cb13…c627`, at which point `sign` answers
+`REFUSED reason=MEASUREMENT_MISMATCH`.
+
+One honest side effect: boot1's `audit` now reads `Next stage: key 3/3 (dev)`, since
+the image is signed with the development key. Nothing is revoked — a stock beta-signed
+image still verifies — but the board's lifecycle state moved because of this project,
+and the write-up says so.
 
 ## The demo
 
@@ -127,8 +159,8 @@ CI=true cargo +1.99.1 xtask dabao dabao-console --no-verify
 python3 ../sealed/cli/sealed.py expect --elf target/riscv32imac-unknown-xous-elf/release/dabao-console
 ```
 
-`RUNBOOK.md` has the board steps (hold `PROG`, plug in, copy three UF2s, press
-`PROG`), the tamper drill, and the troubleshooting table. `DESIGN.md` has the threat
+`RUNBOOK.md` has the board steps (plug in, flash three images over boot1's serial
+`uf2` command, `boot`), the tamper drill, and the troubleshooting table. `DESIGN.md` has the threat
 model.
 
 ---

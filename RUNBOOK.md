@@ -73,35 +73,46 @@ Write that digest down. It is the value the device must print back in step 4.
 
 ## 2. Flash the board
 
-1. **Hold the `PROG` button** on the board while plugging the USB-C cable into the
-   Mac. Keep holding until the volume appears. This forces the bootloader instead
-   of the installed app.
-2. A volume appears under `/Volumes` (also visible in Finder). Confirm:
+1. **Plug in the USB-C cable.** A Dabaos returns to boot1 on plug-in, so a plain
+   replug is usually enough. If it boots the installed app instead, hold `PROG`
+   (nearest the USB connector) and press `RESET` (farthest), releasing `PROG` once
+   the port enumerates.
 
    ```sh
-   ls /Volumes
+   ls /dev/cu.usbmodem*      # boot1 shows up as one of these
+   ls /Volumes | grep BAOCHIP
    ```
 
-3. Copy **all three** UF2 files. First flash needs all three so loader, kernel and
-   app are the same revision; after that `apps.uf2` alone is enough.
+2. **Flash over the serial console, not the volume.** macOS denies non-interactive
+   processes access to the `BAOCHIP` removable volume (`Operation not permitted`),
+   and writes to it hang. boot1 exposes a `uf2 <base64>` console command that takes
+   the same 512-byte blocks, so the CLI speaks that instead:
 
    ```sh
-   cp ~/code/sealed-workspace/xous-core/target/riscv32imac-unknown-xous-elf/release/{loader,xous,apps}.uf2 /Volumes/BAOCHIP/
-   sync
-   diskutil unmount /Volumes/BAOCHIP
+   P=/dev/cu.usbmodem$(ls /dev/cu.usbmodem* | sed 's|.*cu.usbmodem||' | head -1)
+   REL=~/code/sealed-workspace/xous-core/target/riscv32imac-unknown-xous-elf/release
+   python3 sealed/cli/sealed.py -p $P flash --uf2 $REL/loader.uf2
+   python3 sealed/cli/sealed.py -p $P flash --uf2 $REL/xous.uf2
+   python3 sealed/cli/sealed.py -p $P flash --uf2 $REL/apps.uf2
    ```
 
-   Replace `BAOCHIP` with whatever `ls /Volumes` showed if it differs.
+   First flash needs all three so loader, kernel and app are the same revision;
+   after that `apps.uf2` alone is enough (~3 s). `flash --dry-run` validates the
+   block structure and prints the base address without touching the board.
 
-4. **Press `PROG` again** (no re-plug) to leave the bootloader and run the app.
+3. **Boot it** and note that the port re-enumerates on handoff:
+
+   ```sh
+   python3 sealed/cli/sealed.py -p $P send boot
+   sleep 6; ls /dev/cu.usbmodem*   # the app is on a *different* suffix
+   ```
 
 > ⚠️ Two hard rules:
-> * **Never unplug while the bootloader is writing.** If the board starts
->   re-flashing itself, let it finish; interrupting is what bricks boards.
-> * Loading a development image flips the chip's **developer-mode flag
->   permanently**. That is expected for this build. Record it for the write-up —
->   see step 3a — because the hackathon brief asks for honest reporting of the
->   device's lifecycle state.
+> * **Never unplug while an image is being written.** Let the `wrote` acks finish;
+>   interrupting is what bricks boards. The CLI prints `RETRIES`, `SECONDS`, `OK`.
+> * Loading a development image moves boot1's next-stage signing key from
+>   `2/2 (beta)` to `3/3 (dev)` — visible in `audit`, nothing revoked, reversible by
+>   flashing a stock image. Report it honestly in the write-up; see step 3a.
 
 ### 3a. Record the lifecycle state (before flashing, while in bootloader mode)
 
@@ -270,11 +281,13 @@ python3 ~/code/sealed-workspace/sealed/cli/sealed.py expect --elf \
 # EXPECTED_MEASURE=84f71c51b329b429f9ab261d0a0c91a9e483e4d9232b87ca758b4f6b278716bf
 ```
 
-Flash **only** `apps.uf2` (hold PROG, plug, copy, `sync`, unmount, press PROG):
+Flash **only** `apps.uf2` (plug/replug into boot1, then):
 
 ```sh
-cp ~/code/sealed-workspace/xous-core/target/riscv32imac-unknown-xous-elf/release/apps.uf2 /Volumes/BAOCHIP/
-sync && diskutil unmount /Volumes/BAOCHIP
+P=/dev/cu.usbmodem$(ls /dev/cu.usbmodem* | sed 's|.*cu.usbmodem||' | head -1)
+python3 sealed/cli/sealed.py -p $P flash \
+  --uf2 xous-core/target/riscv32imac-unknown-xous-elf/release/apps.uf2
+python3 sealed/cli/sealed.py -p $P send boot
 ```
 
 Now:
@@ -361,7 +374,9 @@ to be."*
 | Symptom | Cause | Fix |
 |---|---|---|
 | No `/Volumes` entry after plugging in | Not in bootloader mode, or charge-only cable | Hold `PROG` *while* plugging in; try another cable/port |
-| Volume appears but copy fails | Bootloader volume is not a normal filesystem | Copy files one at a time, `sync` after each |
+| `cp` to `/Volumes/BAOCHIP` says `Operation not permitted` | macOS TCC blocks removable volumes for non-interactive processes | Use `sealed.py flash` (boot1's serial `uf2` command) instead of the volume |
+| `sealed` answers on the other port after a reset | boot1 and the Xous app enumerate as different CDC devices | Re-run `ls /dev/cu.usbmodem*` after every `boot` |
+| A long command echoes back mangled | The console line editor mangles repeated bytes in its echo | Trust the device's own output lines; the CLI re-checks the quote (`CHALLENGE_BOUND=`) |
 | `no USB serial port found` | App crashed on boot, or still in bootloader | Plug cycle; check `sealed.py monitor` during boot |
 | Port exists, `send help` silent | Console not up yet, or port busy | Close `screen`/other terminals; wait 2s after the port appears |
 | `sealed` prints help instead of acting | Old `apps.uf2` still installed | Reflash `apps.uf2` (loader/kernel unchanged) |
