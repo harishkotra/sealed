@@ -1,0 +1,20 @@
+! SEALED — a signing key that refuses to sign when the board is not running the image you published
+! Baochip Dabao, headless. Everything below was driven from this machine over USB-C.
+: pause 1.2
+$SEALED ports
+: pause 0.4
+! The board is running the sealed image: it hashed its own 96-byte policy blob in RAM.
+$SEALED -p $PORT status
+: pause 0.8
+! Ask it to sign something. The host verifies the signature with stdlib Python only.
+echo "payment 42" > tx.bin
+$SEALED -p $PORT sign --tx tx.bin
+: pause 0.8
+! Freshness quote: sha256(measurement || challenge), signed. Host re-derives the quote.
+$SEALED -p $PORT attest
+: pause 0.8
+! One page of evidence: the device's measurement vs. the digest recomputed from the ELF.
+$SEALED -p $PORT dossier $REL/dabao-console out.md
+: pause 0.5
+cat out.md
+: pause 1.0

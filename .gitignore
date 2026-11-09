@@ -3,3 +3,4 @@
 sealed-signature.json
 out.md
 __pycache__/
+media/*-frames/

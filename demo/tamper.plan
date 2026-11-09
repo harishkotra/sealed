@@ -1,0 +1,10 @@
+! Part 2 — same board, one byte of policy changed, and the key will not move
+! The running image says gate=measure-before-unsea1 instead of ...unseal.
+$SEALED -p $PORT status
+: pause 0.8
+! The measurement moved. The sealed value did not, because the seal lives in the keystore, not in the image.
+$SEALED -p $PORT sign --tx tx.bin
+: pause 0.8
+! That is the whole idea: no network, no vendor, no "please don't". The key is not released.
+$SEALED -p $PORT status
+: pause 1.0
