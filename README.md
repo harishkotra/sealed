@@ -6,18 +6,25 @@ Built for the Baochip / Dabao hackathon (Devcon 8). Runs on the board, headless,
 driven entirely from a Mac over USB serial.
 
 ```
-$ sealed.py status
-SEALED v1
+$ sealed.py -p /dev/cu.usbmodemV6VJDB3 status
 MEASURE=3eecd519bfeb9e39da607e8aaf7f795c15f6013ef0c200edb5f3941488bbdd8e
+MEASURE_LEN=96
+SLOTS=1400,1401,1402,1403
+SIGNS=2
+MODE=owner-enrolled-dev
 STATE=enrolled
+SEALED_MEASURE=3eecd519bfeb9e39da607e8aaf7f795c15f6013ef0c200edb5f3941488bbdd8e
 VERDICT=MATCH
+PUBKEY=041277c6c58f2386c299c843d55e6ee5ec0389b3d329e997383ca2acb8ace759...
 OK
 
-$ sealed.py sign --tx tx.bin
+$ sealed.py -p /dev/cu.usbmodemV6VJDB3 sign --tx tx.bin
+TX_FILE=tx.bin
+HOST_DIGEST=332f7ba20cf88b70d342becb5b4944e58cb50bda1ccd815dd7c6c04222a743dd
 VERDICT=MATCH
-SIG_DER=3045022100...
-PUBKEY=04b1f8...
-SIGNS=1
+DIGEST=332f7ba20cf88b70d342becb5b4944e58cb50bda1ccd815dd7c6c04222a743dd
+SIGNS=3
+OK
 HOST_VERIFY=PASS
 
 # ... now change one byte of the release policy, rebuild, flash apps.uf2 ...
@@ -39,6 +46,24 @@ RESULT=REFUSED
 That last transcript is the project. The device did not ask a server, a vendor, or
 the host whether it was trustworthy. It hashed its own measured window, found that
 it no longer matched what the owner sealed, and declined to unseal the key.
+
+## Watch it
+
+![SEALED demo](media/demo.gif)
+
+`media/demo.mp4` is the same 36 seconds at full size. Both are rendered from
+`media/demo-part{1,2,3}.cast` — asciicast files recorded by
+`tools/record_demo.py`, which runs the real commands against the real board and
+stores what came back. Nothing in the video is typed from a script by hand:
+`demo/build_demo.sh` regenerates every artifact from a board, and the casts in
+this repo are the ones that produced the published video.
+
+| | |
+|---|---|
+| ![](media/shot-01-status.png) | ![](media/shot-02-sign.png) |
+| `status` — the board hashed its own policy blob and agrees with the seal | `sign` — DER signature, verified by 60 lines of stdlib Python on the host |
+| ![](media/shot-04-mismatch.png) | ![](media/shot-05-refused.png) |
+| one character changed: `MEASURE` moved, `SEALED_MEASURE` did not | the key is not released — `REFUSED reason=MEASUREMENT_MISMATCH` |
 
 ## Why this, on this chip
 

@@ -1,5 +1,5 @@
-! Part 2 — same board, one byte of policy changed, and the key will not move
-! The running image says gate=measure-before-unsea1 instead of ...unseal.
+! Part 2 — same board, same key, one character of policy changed
+! The policy now reads  gate=measure-before-unsea1  (the last character is a digit 1, not an L)
 $SEALED -p $PORT status
 : pause 0.8
 ! The measurement moved. The sealed value did not, because the seal lives in the keystore, not in the image.

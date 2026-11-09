@@ -17,16 +17,18 @@ export SEALED PORT REL
 mkdir -p media
 
 if [ "$1" = "--record" ]; then
-  python3 tools/record_demo.py demo/clean.plan  media/demo-part1.cast
-  python3 tools/record_demo.py demo/tamper.plan media/demo-part2.cast
+  python3 tools/record_demo.py demo/clean.plan   media/demo-part1.cast
+  python3 tools/record_demo.py demo/tamper.plan  media/demo-part2.cast
+  python3 tools/record_demo.py demo/restore.plan media/demo-part3.cast
 fi
 
 python3 tools/render_cast.py --out media/demo --fps 8 \
   --card "SEALED|A signing key that only releases when the board is running the image you published|4" \
   media/demo-part1.cast \
-  --card "Part 2 — one byte of policy|Rebuild with a single character changed, flash it, and ask for a signature again|3.5" \
+  --card "Part 2 — one character of policy|Rebuild with a single character changed, flash it, ask for a signature again|3.5" \
   media/demo-part2.cast \
-  --card "Part 3 — the seal does not follow the code|Flash the published image back: the key returns, and the signature counter never reset|3.5" \
+  --card "Part 3 — the gate follows the code|Flash the published image back: same key, same counter, signatures return|3.5" \
+  media/demo-part3.cast \
   --shot "STATE=enrolled=01-status" \
   --shot "HOST_VERIFY=PASS=02-sign" \
   --shot "CHALLENGE_BOUND=PASS=03-attest" \

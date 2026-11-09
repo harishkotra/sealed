@@ -1,0 +1,9 @@
+! Part 3 — the published image is flashed back, and the same key answers again
+$SEALED -p $PORT status
+: pause 0.8
+! Nothing was re-enrolled: same PUBKEY, same slot state, counter picked up where it left off.
+$SEALED -p $PORT sign --tx tx.bin
+: pause 0.8
+! The gate is a property of the code, not of the device. Change the code, the key stops. Change it back, it returns.
+$SEALED -p $PORT attest
+: pause 1.0

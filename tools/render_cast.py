@@ -33,6 +33,22 @@ ANSI = re.compile(r"\x1b\[([0-9;]*)m")
 STYLES = {"0": "#c9d1d9", "2": "#6b7a90", "31": "#ff7b72", "1;32": "#7ee787"}
 
 
+REPO_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def DISPLAY_SUBS(text):
+    """Show commands the way a viewer would type them.
+
+    The cast stores the exact command that ran (with the absolute path the
+    recording script used); only the on-screen form is shortened, so the
+    transcript stays faithful while the video does not advertise a home
+    directory.
+    """
+    text = text.replace("python3 %s/cli/sealed.py" % REPO_PATH,
+                        "python3 sealed/cli/sealed.py")
+    return text.replace(REPO_PATH + "/", "")
+
+
 def parse_ansi(text, style="#c9d1d9"):
     """Split a line into [(text, colour)] runs."""
     runs, pos = [], 0
@@ -59,7 +75,7 @@ def load_cast(path):
         ev = json.loads(raw)
         if ev[1] != "o":
             continue
-        buf += ev[2]
+        buf += DISPLAY_SUBS(ev[2])
         while "\r\n" in buf or "\n" in buf:
             sep = "\r\n" if "\r\n" in buf else "\n"
             idx = buf.index(sep)
@@ -216,7 +232,7 @@ def main():
             for t, runs in payload:
                 flat.append((start + t, "".join(x for x, _ in runs)))
     for spec in shots:
-        marker, _, name = spec.partition("=")
+        marker, _, name = spec.rpartition("=")
         hit = next((t for t, text in flat if marker in text), None)
         if hit is None:
             print("SHOT_MISS=%s" % marker)
