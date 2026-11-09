@@ -45,6 +45,33 @@ The MMU means the app's memory is the app's memory. The policy blob the device m
 
 What the board does not give you is an attestation key. There is no factory certificate chain to check against, and there is not going to be one. So the anchor is the owner's enrollment, and the README says so in those words.
 
+## The shape of it
+
+```mermaid
+flowchart TB
+    subgraph host["Host: sealed.py (Python 3, stdlib only)"]
+        C1["status · enroll · sign · attest · flash"]
+        C2["p256_verify()<br/>60 lines, no deps"]
+    end
+
+    subgraph board["Dabao: Bao1x + Xous"]
+        G["SealedCmd (Rust, no_std)<br/>enrolled? · measured? · equal?"]
+        P["policy blob<br/>96 bytes, .rodata"]
+        KS["keystore service<br/>APPLICATION partition"]
+        RR[("RRAM<br/>state · measure · seed · counter")]
+        TR["TRNG"]
+    end
+
+    C1 -- "USB-C CDC<br/>KEY=VALUE text" --> G
+    G -- "sha256(policy blob)" --> P
+    G -- "read/write app keys" --> KS --> RR
+    TR -- "32-byte seed" --> KS
+    G -- "REFUSED before the key exists" --> C1
+    G -- "SIG_DER + PUBKEY + QUOTE" --> C2
+```
+
+The host asks. The board decides. The key never crosses the cable, and the seed never leaves RRAM.
+
 ## Measuring something small on purpose
 
 The naive design hashes the whole firmware image. On a 150 MHz core that is slow, and it is fragile in a way that will bite you: release images get stripped, linker scripts reorder sections, and "hash everything between these two symbols" turns into a build-specific guess.
