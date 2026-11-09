@@ -1,5 +1,13 @@
 # Demo — 90 seconds, one terminal, no screen
 
+The recorded version of this is `media/demo.mp4` (36 s, three parts) with
+`media/demo.gif` inline in the README and five stills in `media/shot-*.png`.
+Regenerate all of it with `demo/build_demo.sh`, or
+`demo/build_demo.sh --record` to re-record from a board. The `.cast` files are
+asciicast v2: `python3 -m pip install asciinema && asciinema play media/demo-part1.cast`
+replays the session in a terminal, and `tools/render_cast.py` turns any cast into
+mp4/gif without network access.
+
 Board state at the start: flashed, enrolled, `VERDICT=MATCH`, on
 `/dev/cu.usbmodemV6VJDB3` (the app's CDC port; boot1 is a different suffix).
 
