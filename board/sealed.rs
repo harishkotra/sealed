@@ -203,7 +203,10 @@ impl SealedCmd {
             .read_app_key(SLOT_COUNTER)
             .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .unwrap_or(0);
-        if state[..8] == MAGIC_ENROLLED {
+        // `state` is a full 32-byte slot; compare against the whole padded
+        // magic. (`state[..8] == MAGIC_ENROLLED` silently compares 8 bytes
+        // against 32 and is therefore always false.)
+        if state == MAGIC_ENROLLED {
             (
                 true,
                 self.ks.read_app_key(SLOT_MEASURE).ok(),
@@ -224,7 +227,7 @@ impl SealedCmd {
         writeln!(s, "  enroll              seal the *running* measurement, mint device key").ok();
         writeln!(s, "  sign <64hex>        sign a 32-byte digest, only if measurement matches").ok();
         writeln!(s, "  attest <64hex>      quote over sha256(measurement || challenge)").ok();
-        writeln!(s, "  forget              wipe seal + seed (re-enroll demo)").ok();
+        writeln!(s, "  forget              wipe seal + seed (re-enroll demo)
         s
     }
 }
@@ -315,6 +318,28 @@ impl<'a> ShellCmdApi<'a> for SealedCmd {
                 writeln!(ret, "TRNG=OK").ok();
                 writeln!(ret, "OK").ok();
             }
+            "probe" => {
+                // Diagnostic: does the keystore actually give this app
+                // read/write on the APPLICATION slots we selected?
+                let names = [("STATE", SLOT_STATE), ("MEASURE", SLOT_MEASURE),
+                             ("SEED", SLOT_SEED), ("COUNTER", SLOT_COUNTER)];
+                for (n, slot) in names.iter() {
+                    match self.ks.read_app_key(*slot) {
+                        Ok(d) => writeln!(ret, "PROBE_{}={}", n, hex(&d)).ok(),
+                        Err(e) => writeln!(ret, "PROBE_{}=ERR_{:?}", n, e).ok(),
+                    };
+                }
+                let marker = [0xa5u8; 32];
+                match self.ks.write_app_key(SLOT_STATE, &marker) {
+                    Ok(()) => writeln!(ret, "WRITE_RT=OK").ok(),
+                    Err(e) => writeln!(ret, "WRITE_RT=ERR_{:?}", e).ok(),
+                };
+                match self.ks.read_app_key(SLOT_STATE) {
+                    Ok(d) => writeln!(ret, "READ_RT={}", hex(&d)).ok(),
+                    Err(e) => writeln!(ret, "READ_RT=ERR_{:?}", e).ok(),
+                };
+                writeln!(ret, "OK").ok();
+            }
             "enroll" => {
                 let c = match &current {
                     Ok(c) => *c,
@@ -347,6 +372,8 @@ impl<'a> ShellCmdApi<'a> for SealedCmd {
                     writeln!(ret, "ERR keystore write refused (slot {})", SLOT_STATE).ok();
                     return Ok(Some(ret));
                 }
+                let persist = self.ks.read_app_key(SLOT_STATE).map(|d| d == MAGIC_ENROLLED).unwrap_or(false);
+                writeln!(ret, "PERSIST={}", if persist { "OK" } else { "FAIL" }).ok();
                 writeln!(ret, "ENROLLED=1").ok();
                 writeln!(ret, "SEALED_MEASURE={}", hex(&c)).ok();
                 writeln!(ret, "PUBKEY={}", pubkey_hex(&sk)).ok();

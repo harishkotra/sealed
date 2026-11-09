@@ -22,10 +22,16 @@ HOST_VERIFY=PASS
 
 # ... now change one byte of the release policy, rebuild, flash apps.uf2 ...
 
+$ sealed.py status
+MEASURE=44c9cb139733065c9d92f70990fe0a64f4804da7564a9c21389703e489b1c627
+STATE=enrolled
+SEALED_MEASURE=3eecd519bfeb9e39da607e8aaf7f795c15f6013ef0c200edb5f3941488bbdd8e
+VERDICT=MISMATCH
+
 $ sealed.py sign --tx tx.bin
 REFUSED reason=MEASUREMENT_MISMATCH
 SEALED_MEASURE=3eecd519...
-MEASURE=84f71c51...
+MEASURE=44c9cb13...
 ERR running image is not the image that was sealed
 RESULT=REFUSED
 ```
@@ -73,8 +79,13 @@ cd xous-core && CI=true cargo +1.99.1 xtask dabao dabao-console --no-verify
 python3 sealed/cli/sealed.py expect --elf \
   target/riscv32imac-unknown-xous-elf/release/dabao-console
 
-# 3. flash: hold PROG, plug in USB, copy loader/xous/apps .uf2, press PROG
-#    then talk to it:
+# 3. flash over serial (macOS blocks the BAOCHIP volume from non-interactive
+#    processes, so the CLI speaks boot1's `uf2 <base64>` console command instead)
+python3 sealed/cli/sealed.py -p /dev/cu.usbmodem<BOOT1> flash \
+  --uf2 target/riscv32imac-unknown-xous-elf/release/loader.uf2
+#    repeat for xous.uf2 then apps.uf2, then:
+python3 sealed/cli/sealed.py -p /dev/cu.usbmodem<BOOT1> send boot
+#    talk to it on the *new* port (it re-enumerates on handoff):
 python3 sealed/cli/sealed.py selftest
 python3 sealed/cli/sealed.py enroll
 python3 sealed/cli/sealed.py sign --tx tx.bin
@@ -103,14 +114,16 @@ exactly once so a duplicated blob is a hard error.
 Reproducibility, measured on two independent checkouts of the same source:
 
 ```
+# clean policy
 EXPECTED_MEASURE=3eecd519bfeb9e39da607e8aaf7f795c15f6013ef0c200edb5f3941488bbdd8e
-# after flipping one byte ("unseal" -> "unseaL") in the policy:
-EXPECTED_MEASURE=84f71c51b329b429f9ab261d0a0c91a9e483e4d9232b87ca758b4f6b278716bf
+# after flipping one byte ("unseal" -> "unsea1") in the policy:
+EXPECTED_MEASURE=44c9cb139733065c9d92f70990fe0a64f4804da7564a9c21389703e489b1c627
 ```
 
-Both checkouts also produced byte-identical UF2 sizes (apps 689,664 / loader
-242,176 / xous 2,336,256 bytes), which is the "reproducible by the next person"
-claim with receipts.
+Both numbers were confirmed three ways: computed from the ELF on the host, reported
+by the device as `MEASURE=`, and (for the clean build) reproduced byte-for-byte —
+rebuilding from a clean tree yields an identical `apps.uf2`
+(`sha256 6d8dfecacea8cbac03747b29c232d8cb01e0b2a3a78b6733b4f8d5eb2c9ab4e7`).
 
 ## Host CLI
 
@@ -124,6 +137,7 @@ verifier against an openssl-generated vector before you trust it.
 | `ports` | list USB serial devices |
 | `monitor --seconds N` | dump the raw serial transcript (boot logs, bootloader console) |
 | `send <line>` | send one raw line, print everything back |
+| `flash --uf2 f` | write an image over boot1's serial `uf2` command (`--dry-run` parses blocks) |
 | `selftest` | on-device SHA-256 KAT, ECDSA roundtrip, TRNG check |
 | `status` | measurement, state, verdict, signature counter |
 | `enroll` | seal the current measurement to a fresh TRNG key |
@@ -133,6 +147,7 @@ verifier against an openssl-generated vector before you trust it.
 | `expect --elf f` | compute the expected measurement from a build artifact |
 | `dossier [elf] [out.md]` | one-page evidence bundle (device quote vs source rebuild) |
 | `forget` | clear the seal (owner re-anchors) |
+| `send "sealed probe"` | device-side keystore diagnostics (slot reads + write/read roundtrip) |
 | `hostcheck` | validate the host-side P-256 verifier |
 
 ## Layout
@@ -151,13 +166,59 @@ sealed/
 `cmds.rs`, and adds `p256` + `sha2` to the app's `Cargo.toml`. Running it twice is a
 no-op; `--revert` removes it.
 
+## Verified on hardware
+
+Every number below is from a Dabao running the sealed image, driven over USB-C from
+a Mac, captured at 2026-11-09.
+
+```
+sealed selftest    SHA256_ABC=ba7816bf...  SHA256_KAT=PASS  ECDSA_ROUNDTRIP=PASS
+                   ECDSA_BADMSG=PASS  TRNG=OK
+sealed enroll      PERSIST=OK  ENROLLED=1
+                   PUBKEY=041277c6c58f2386c299c843d55e6ee5ec0389b3d329e997383ca2acb8ace759...
+sealed status      MEASURE=3eecd519...dd8e  STATE=enrolled  VERDICT=MATCH  SIGNS=1
+sealed sign f17f... VERDICT=MATCH  SIG_DER=3045022100bd933bbb...  SIGNS=1
+sealed attest 7ea3.. QUOTE=d392741c...30e6
+sealed probe       PROBE_STATE=5345414c45443031...  WRITE_RT=OK  READ_RT=a5a5...
+```
+
+Host side, from those exact transcripts: `HOST_VERIFY=True` for the signature,
+`False` when one byte of the message is flipped, and the quote recomputed as
+`sha256(measurement ‖ challenge)` matches the device byte-for-byte.
+
+Tamper drill on the same board: flash an image whose policy differs by one byte,
+reboot, and the seal does not follow it —
+
+```
+MEASURE=44c9cb139733065c9d92f70990fe0a64f4804da7564a9c21389703e489b1c627
+SEALED_MEASURE=3eecd519bfeb9e39da607e8aaf7f795c15f6013ef0c200edb5f3941488bbdd8e
+VERDICT=MISMATCH
+REFUSED reason=MEASUREMENT_MISMATCH
+```
+
+`SIGNS=1` in the tampered run is the same counter from before the reflash: the
+keystore state survives `apps.uf2` replacement, which is what makes the refusal a
+statement about the seal rather than about a rebuild.
+
+Two bugs the hardware found that the build could not:
+
+* `state[..8] == MAGIC_ENROLLED` compares an 8-byte slice against a 32-byte array;
+  Rust accepts it and the comparison is always false, so `status` reported
+  `unsealed` on a device that was enrolled. Fixed to compare the full slot.
+* The console's serial line editor mangles repeated bytes in its *echo* (and once
+  truncated a 66-character argument to 64). The device's own output lines are
+  authoritative, and the CLI now refuses to trust a signature unless it also
+  re-derives the quote from the challenge it sent (`CHALLENGE_BOUND=`).
+
 ## Status
 
 * Board module builds clean with the Baochip toolchain (1.99.1 + `xtask install-toolkit`).
-* Fresh-clone → `apply.py` → build produces all three UF2s; measurement matches the
-  published digest on both checkouts.
+* Fresh-clone → `apply.py` → build produces all three UF2s; the measurement matches
+  the published digest on both checkouts, and a clean rebuild is byte-identical.
 * Host CLI self-checks pass without any hardware attached (`hostcheck`).
-* **Not yet run on physical silicon.** The device-side transcripts in this README
-  are the expected output from the code paths, and the runbook's step 4 compares the
-  device's `MEASURE=` to the published digest precisely so the first real run
-  validates the central claim rather than assuming it.
+* **Run on physical silicon**: measurement parity, enroll/persist, sign, attest and
+  the tamper refusal are all verified on a Dabao (transcripts above).
+* Honest limits: no factory attestation key exists on this part, so the trust anchor
+  is the owner's own enrollment; the signing path runs in Rust, not the crypto
+  accelerators; loading a dev-signed image flips boot1's next-stage key identity to
+  `3/3 (dev)` (visible in `audit`, reversible by flashing a stock image).

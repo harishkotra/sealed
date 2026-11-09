@@ -5,8 +5,8 @@ the Baochip `dabao` board.
 
 The board does the crypto; this script does the talking. No third-party
 dependencies: serial is driven through termios and ECDSA P-256 verification is
-implemented from RFC 8032 below (checked against the RFC's test vector 1 by
-`sealed.py selftest --host`).
+implemented in ~60 lines of pure Python below (checked against an
+openssl-generated vector by `sealed.py hostcheck`).
 
 Typical use
 -----------
@@ -19,6 +19,7 @@ Typical use
 """
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -114,6 +115,28 @@ class Serial:
             buf += chunk
             text = buf.decode("utf-8", "replace")
             if any(m in text for m in PROMPT_MARKERS):
+                break
+        return buf.decode("utf-8", "replace")
+
+    def read_ack(self, timeout=4.0, quiet=0.30):
+        """Read until one of the boot1 uf2 acks shows up, then stop."""
+        buf = b""
+        deadline = time.time() + timeout
+        last = time.time()
+        while time.time() < deadline:
+            r, _, _ = select.select([self.fd], [], [], 0.02)
+            if r:
+                try:
+                    chunk = os.read(self.fd, 8192)
+                except OSError:
+                    break
+                if chunk:
+                    buf += chunk
+                    last = time.time()
+                    t = buf.decode("utf-8", "replace").lower()
+                    if ("wrote" in t) or ("invalid write address" in t) or ("corrupt base64" in t) or ("write error" in t):
+                        return buf.decode("utf-8", "replace")
+            elif buf and time.time() - last > quiet:
                 break
         return buf.decode("utf-8", "replace")
 
@@ -318,6 +341,82 @@ def cmd_selftest(s, args):
     return 0 if ok else 1
 
 
+# ---------------------------------------------------------------------------
+# UF2-over-serial flashing
+#
+# The board exposes a USB mass-storage volume for UF2 files, but macOS can deny
+# a non-interactive process access to removable volumes. boot1 also accepts UF2
+# blocks one at a time on the console (`uf2 <base64>`), which needs no volume
+# permissions. This sends the same blocks the volume copy would have written.
+# ---------------------------------------------------------------------------
+UF2_MAGIC0 = 0x0A324655
+UF2_MAGIC1 = 0x9E5D5157
+UF2_MAGIC_END = 0x0AB16F30
+
+
+def uf2_blocks(path):
+    data = open(path, "rb").read()
+    if len(data) % 512:
+        raise SystemExit("%s: not a UF2 file (size not a multiple of 512)" % path)
+    out = []
+    for off in range(0, len(data), 512):
+        b = data[off:off + 512]
+        m0, m1 = struct.unpack("<II", b[0:8])
+        if m0 != UF2_MAGIC0 or m1 != UF2_MAGIC1 or struct.unpack("<I", b[508:512])[0] != UF2_MAGIC_END:
+            raise SystemExit("%s: bad UF2 magic at block %d" % (path, off // 512))
+        addr, size = struct.unpack("<II", b[12:20])
+        out.append((addr, size, b))
+    return out
+
+
+def cmd_flash(s, args):
+    blocks = uf2_blocks(args.uf2)
+    print("UF2=%s" % args.uf2)
+    print("BLOCKS=%d" % len(blocks))
+    lo = min(a for a, _, _ in blocks)
+    hi = max(a + n for a, n, _ in blocks)
+    print("RANGE=0x%08x..0x%08x" % (lo, hi))
+    if args.dry_run:
+        print("DRY_RUN=1")
+        return 0
+
+    t0 = time.time()
+    done = 0
+    retries = 0
+    for idx, (addr, size, raw) in enumerate(blocks):
+        b64 = base64.b64encode(raw).decode("ascii")
+        ok = False
+        for attempt in range(args.retries):
+            s.write("uf2 " + b64 + "\r")
+            resp = s.read_ack(4.0)
+            low = resp.lower()
+            if "corrupt base64" in low or "decode error" in low:
+                continue
+            if "invalid write address" in low:
+                raise SystemExit("block %d @0x%08x rejected: invalid write address" % (idx, addr))
+            if ("wrote" in low) or ("write error" in low):
+                if "write error" in low:
+                    raise SystemExit("block %d @0x%08x: %s" % (idx, addr, resp.strip()))
+                ok = True
+                break
+            retries += 1
+        if not ok:
+            raise SystemExit("block %d @0x%08x: no ack after %d tries" % (idx, addr, args.retries))
+        done += 1
+        if args.progress and (done % args.progress == 0 or done == len(blocks)):
+            el = time.time() - t0
+            rate = done / el if el else 0
+            eta = (len(blocks) - done) / rate if rate else 0
+            print("PROGRESS=%d/%d rate=%.1f blk/s eta=%.0fs" % (done, len(blocks), rate, eta),
+                  flush=True)
+    el = time.time() - t0
+    print("WROTE=%d" % done)
+    print("RETRIES=%d" % retries)
+    print("SECONDS=%.1f" % el)
+    print("OK")
+    return 0
+
+
 def cmd_monitor(s, args):
     """Dump the raw serial transcript for a while. Use this to watch the boot
     messages, to confirm the shell prompt, or to talk to the boot1 console
@@ -381,8 +480,15 @@ def cmd_attest(s, args):
         return 1
     ok = p256_verify(bytes.fromhex(r["PUBKEY"]), bytes.fromhex(r["QUOTE"]), bytes.fromhex(r["SIG_DER"]))
     print("HOST_VERIFY=%s" % ("PASS" if ok else "FAIL"))
+    # Bind the quote to *this* challenge. The device's console line editor
+    # silently drops an immediately-repeated byte, so a mangled argument would
+    # otherwise still produce a perfectly valid signature over the wrong quote.
+    st = s.command("sealed status")
+    meas = st.get("SEALED_MEASURE") or st.get("MEASURE")
+    bound = hashlib.sha256(bytes.fromhex(meas) + bytes.fromhex(challenge)).hexdigest() == r["QUOTE"]
     print("CHALLENGE=%s" % challenge)
-    return 0 if ok else 1
+    print("CHALLENGE_BOUND=%s" % ("PASS" if bound else "FAIL"))
+    return 0 if (ok and bound) else 1
 
 
 def cmd_sign(s, args):
@@ -464,6 +570,11 @@ def main():
     sub.add_parser("selftest")
     sub.add_parser("policy")
     sub.add_parser("hostcheck")
+    p_fl = sub.add_parser("flash", help="write a UF2 file over the boot1 serial console")
+    p_fl.add_argument("--uf2", required=True)
+    p_fl.add_argument("--dry-run", action="store_true")
+    p_fl.add_argument("--progress", type=int, default=100)
+    p_fl.add_argument("--retries", type=int, default=3)
     p_mon = sub.add_parser("monitor", help="dump raw serial output, send nothing")
     p_mon.add_argument("--seconds", type=float, default=8.0)
     p_snd = sub.add_parser("send", help="send one raw line and print the reply")
@@ -495,6 +606,13 @@ def main():
     if a.cmd is None:
         ap.print_help()
         return 1
+
+    if a.cmd == "flash":
+        sfl = Serial(pick_port(a.port), a.baud)
+        try:
+            return cmd_flash(sfl, a)
+        finally:
+            sfl.close()
 
     if a.cmd == "monitor":
         return cmd_monitor(open_port(a), a)
