@@ -92,7 +92,7 @@ python3 sealed/cli/sealed.py sign --tx tx.bin
 ```
 
 Full board procedure, including the tamper drill and a troubleshooting table:
-**[RUNBOOK.md](RUNBOOK.md)**.
+**[RUNBOOK.md](RUNBOOK.md)**. Ninety-second recording script: **[DEMO.md](DEMO.md)**.
 Threat model and the list of things this does *not* protect against:
 **[DESIGN.md](DESIGN.md)**.
 
